@@ -17,7 +17,8 @@ static void freePubkeyArray(secp256k1_pubkey **a) {
         free(a);
 }
 */
-// #cgo LDFLAGS: ${SRCDIR}/c-secp256k1/.libs/libsecp256k1.a -lgmp
+// #cgo LDFLAGS: ${SRCDIR}/c-secp256k1/.libs/libsecp256k1.a -L/opt/homebrew/opt/gmp/lib
+// note: -igmp in m1 pro is not working, so use -L/opt/homebrew/opt/gmp/lib
 import "C"
 
 import (
@@ -104,7 +105,8 @@ type EcdsaRecoverableSignature struct {
 
 func newContext() *Context {
 	return &Context{
-		ctx: &C.secp256k1_context{},
+		ctx: C.secp256k1_context_create(C.SECP256K1_CONTEXT_SIGN |
+			C.SECP256K1_CONTEXT_VERIFY),
 	}
 }
 
@@ -448,7 +450,7 @@ func Ecdh(ctx *Context, pubKey *PublicKey, privKey []byte) (int, []byte, error) 
 		return 0, []byte{}, errors.New(ErrorPrivateKeySize)
 	}
 	secret := make([]byte, LenPrivateKey)
-	result := int(C.secp256k1_ecdh(ctx.ctx, cBuf(secret[:]), pubKey.pk, cBuf(privKey[:])))
+	result := int(C.secp256k1_ecdh(ctx.ctx, cBuf(secret[:]), pubKey.pk, cBuf(privKey[:]), nil, nil))
 	if result != 1 {
 		return result, []byte{}, errors.New(ErrorEcdh)
 	}

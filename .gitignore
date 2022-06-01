@@ -6,3 +6,4 @@ build
 
 test.out
 cover_profile.html
+/secp256k1-go/secp256k1/c-secp256k1/
