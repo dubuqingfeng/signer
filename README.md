@@ -18,4 +18,11 @@
     + EdDSA-ed448
 + Security
     + HSM
+    + MPC
+  
+## 参考资料
+
++ [btcsigner](https://github.com/btccom/btcsigner)
++ [firefly-signer](https://github.com/hyperledger/firefly-signer)
++ [micro-eth-signer](https://github.com/paulmillr/micro-eth-signer)
 

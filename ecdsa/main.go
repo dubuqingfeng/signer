@@ -1,3 +1,0 @@
-package ecdsa
-
-func main() {}
