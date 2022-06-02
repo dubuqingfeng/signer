@@ -5,15 +5,21 @@ import (
 	"crypto/hmac"
 	"crypto/sha512"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"github.com/mndrix/btcutil"
+	"math"
 	"math/big"
+	"strconv"
+	"strings"
 )
 
 var (
 	// ErrInvalidKey is returned when a key is invalid.
-	ErrInvalidKey  = errors.New("invalid key")
-	ErrHardenedKey = errors.New("hardened key")
+	ErrInvalidKey           = errors.New("invalid key")
+	ErrHardenedKey          = errors.New("hardened key")
+	ErrDeriveBeyondMaxDepth = errors.New("cannot derive a key with more than 255 depth")
+	ErrInvalidPath          = errors.New("invalid path")
 )
 
 var (
@@ -70,11 +76,82 @@ func (k *PublicKey) Derive(childIdx uint32) (*PublicKey, error) {
 	if childIdx >= HardenedKeyZeroIndex {
 		return nil, ErrHardenedKey
 	}
-	return nil, nil
+	if k.Level == math.MaxUint8 {
+		return nil, ErrDeriveBeyondMaxDepth
+	}
+	// concatenate data and index
+	data := make([]byte, 4)
+	binary.BigEndian.PutUint32(data, childIdx)
+	data = append(k.Data, data...)
+
+	// calculate the new key
+	newKey, err := k.calculateChildKey(data)
+	if err != nil {
+		return nil, err
+	}
+
+	// create the new public key
+	return &PublicKey{
+		ChainCode:  newKey.ChainCode,
+		ChildIndex: childIdx,
+		Data:       newKey.Data,
+		Level:      k.Level + 1,
+		ParentFP:   k.ParentFP,
+		Version:    k.Version,
+	}, nil
+}
+
+func (k *PublicKey) calculateChildKey(data []byte) (*PublicKey, error) {
+	// calculate the data
+	data = append(k.Version, data...)
+	data = append(k.ParentFP, data...)
+
+	// calculate the HMAC
+	hmacCode := hmac.New(sha512.New, k.ChainCode)
+	hmacCode.Write(data)
+	intermediary := hmacCode.Sum(nil)
+
+	// split the intermediary into the private key and chain code
+	privateKey := intermediary[:32]
+	chainCode := intermediary[32:]
+
+	// create the new public key
+	return &PublicKey{
+		ChainCode:  chainCode,
+		ChildIndex: 0,
+		Data:       privateKey,
+		Level:      k.Level + 1,
+		ParentFP:   k.ParentFP,
+		Version:    k.Version,
+	}, nil
 }
 
 func (k *PublicKey) DeriveWithPath(path string) (*PublicKey, error) {
-	return nil, nil
+	// parse the path
+	paths := strings.Split(path, "/")
+	if len(paths) == 0 {
+		return nil, ErrInvalidPath
+	}
+
+	// derive the key
+	for _, p := range paths {
+		// parse the path
+		if p == "" {
+			return nil, ErrInvalidPath
+		}
+		index, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, err
+		}
+
+		// derive the key
+		k, err = k.Derive(uint32(index))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return k, nil
 }
 
 func (k *PublicKey) Serialize() []byte {
@@ -82,7 +159,26 @@ func (k *PublicKey) Serialize() []byte {
 }
 
 func (k *PublicKey) String() string {
-	return ""
+	if 0 == len(k.Data) {
+		return "zeroed public key"
+	}
+
+	var childIndex [ChildIndexLen]byte
+	binary.BigEndian.PutUint32(childIndex[:], k.ChildIndex)
+
+	var serializedKeyLen = len(k.Version) + len(k.ParentFP) + len(k.Data) + len(childIndex)
+	// The serialized format is:
+	//   version (4) || depth (1) || parent fingerprint (4)) ||
+	//   child num (4) || chain code (32) || key data (33)
+	serialized := make([]byte, 0, serializedKeyLen)
+	serialized = append(serialized, k.Version...)
+	serialized = append(serialized, k.Level)
+	serialized = append(serialized, k.ParentFP...)
+	serialized = append(serialized, childIndex[:]...)
+	serialized = append(serialized, k.ChainCode...)
+	serialized = append(serialized, k.Data...)
+
+	return hex.EncodeToString(serialized)
 }
 
 func (k *PrivateKey) getIntermediary(childIdx uint32) ([]byte, error) {
@@ -133,12 +229,36 @@ func (k *PrivateKey) Derive(childIdx uint32) (*PrivateKey, error) {
 		return nil, err
 	}
 	childKey.ParentFP = fingerprint[:4]
-		childKey.Data = addPrivateKeys(intermediary[:32], k.Data)
+	childKey.Data = addPrivateKeys(intermediary[:32], k.Data)
 	return nil, nil
 }
 
 func (k *PrivateKey) DeriveWithPath(path string) (*PrivateKey, error) {
-	return nil, nil
+	// parse the path
+	paths := strings.Split(path, "/")
+	if len(paths) == 0 {
+		return nil, ErrInvalidPath
+	}
+
+	// derive the key
+	for _, p := range paths {
+		// parse the path
+		if p == "" {
+			return nil, ErrInvalidPath
+		}
+		index, err := strconv.Atoi(p)
+		if err != nil {
+			return nil, err
+		}
+
+		// derive the key
+		k, err = k.Derive(uint32(index))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return k, nil
 }
 
 func (k *PrivateKey) Serialize() []byte {
@@ -165,9 +285,19 @@ func (k *PrivateKey) String() string {
 	return ""
 }
 
-func (k *PrivateKey) ToPublicKey() *PublicKey {
+func (k *PrivateKey) ToPublicKeyBytes() []byte {
 	// private key to public key
-	return nil
+	return publicKeyForPrivateKey(k.Data)
+}
+
+func (k *PrivateKey) ToPublicKey() *PublicKey {
+	return &PublicKey{
+		Data:       k.ToPublicKeyBytes(),
+		Version:    k.Version,
+		ChildIndex: k.ChildIndex,
+		Level:      k.Level,
+		ParentFP:   k.ParentFP,
+	}
 }
 
 // addPrivateKeys adds two private keys together.
